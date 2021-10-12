@@ -1,9 +1,11 @@
 ---
-title: "Proyecto"
+title: "Proyecto Simulación"
+autors: "Samuel Yesid Cadena Pinilla, Oscar Mauricio Campos Sepulveda, Carlos Eduardo Becerra Lizarazo"
 output:
   html_document: default
   pdf_document: default
 ---
+
 
 # Diseño del Grafo
 
