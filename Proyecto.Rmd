@@ -888,29 +888,3 @@ print(paste("La pandemia tuvo un tiempo estimado de: ", semanasCe2, " Semanas"))
 print(paste("En este tiempo fallecieron: ", muertesCe2[semanas], "Personas"))
 print(paste("El pico de contagios fue de: ", max(infCe2), "Personas"))
 ```
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
