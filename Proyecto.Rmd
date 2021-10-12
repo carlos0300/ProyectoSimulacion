@@ -1,0 +1,914 @@
+---
+title: "Proyecto"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+# Diseño del Grafo
+
+```{r}
+install.packages("dygraphs")
+install.packages("tidyverse")
+install.packages("tidygraph")
+install.packages("ggraph")
+install.packages("dplyr") 
+
+
+```
+
+```{r warning=FALSE}
+library(dplyr)
+library(dygraphs)
+library(tidyverse)
+library(tidygraph)
+library(ggraph)
+library(igraph)
+```
+
+```{r}
+#establecemos la ruta del proyecto
+setwd("C:/Users/cbece/Desktop/Univesidad/2021-1/Simulación digital/Proyecto") 
+```
+
+```{r}
+#creacion de los nodos
+hab <- 10000
+id <- 1:hab
+edad <- round(runif(hab,10,90))
+# 0 Normal 1.UCI 2. Fallecido
+condicion <- rep(0,hab)
+#0 NS 0 SI 1 NO
+decision <- rep(0,hab)
+dosis <- rep(0, hab)
+infectados <- rep(0, hab)
+grado <- rep(0, hab)
+t.cont <- rep(0, hab)
+
+```
+
+```{r}
+nodos <- data.frame(
+  "id" = as.integer(id), 
+  "edad" = as.integer(edad), 
+  "condicion" = as.integer(condicion),
+  "decision" = as.integer(decision),
+  "dosis" = as.integer(dosis),
+  "infectados" = as.integer(infectados),
+  "grado" = as.integer(grado),
+  "t.cont" = as.integer(t.cont))
+
+nodos
+```
+
+```{r}
+#creación de las aristas
+
+n <- 2*hab #numero de relaciones
+from1 <- round(runif(n, 1, hab))
+to1 <- round(runif(n, 1, hab))
+
+```
+
+```{r}
+x <- c()
+for(i in 1:length(from1)){
+  #elimino aristas que apuntan al mismo nodo
+  if(from1[i]==to1[i]){
+    x <- c(x,i)
+  }
+}
+from2 <- from1[-x]
+to2 <- to1[-x]
+
+```
+
+```{r}
+#garantizo la bidireccionalidad de las aristas
+from <- c(from2, to2)
+to <- c(to2, from2)
+aristas <- data.frame(
+  "from" = as.integer(from),
+  "to" =as.integer(to)
+)
+#elimino aristas repetidas
+aristas <- distinct(aristas)
+
+# 1-nucleo familiar 2-familia 3-amigos 4-compañeros estudio/trabajo
+relacion <- round(runif(nrow(aristas), 1, 4))
+
+aristas$relacion = as.integer(relacion)
+
+aristas
+
+```
+
+```{r}
+#aca establecemos el grado de cada nodo
+for(nodo in nodos$id){
+  c <- 0
+  for(arista in aristas$from){
+    if(nodo==arista){
+      c <- c + 1
+      nodos$grado[nodos$id==nodo]<- c
+    }
+  }
+}
+
+```
+
+```{r}
+grafo <- tbl_graph(
+  nodes = nodos,
+  edges = aristas,
+  direct =FALSE
+)
+
+grafo
+```
+
+```{r}
+ggraph(grafo, layout= "graphopt") + geom_edge_link(width = 1 , color = "gray") + geom_node_point(size=10, color = "#00AFBB") + geom_node_text(aes(label = id)) + theme_graph()
+```
+
+
+```{r warning=FALSE}
+
+set.seed(123)
+grafo %>%
+  activate(nodes) %>%
+  mutate(centrality = centrality_authority()) %>%
+  ggraph(layout = "graphopt") + 
+  geom_edge_link(width = 1, colour="lightgray") + 
+  geom_node_point(aes(size=centrality, colour=centrality)) + 
+  geom_node_text(aes(label= id), repel = TRUE) + 
+  scale_color_gradient(low = "yellow", high = "red") + 
+  theme_graph()
+  
+
+```
+
+## Tener en cuenta la decisión de no vacunarse
+
+```{r}
+
+for(nodo in nodos$id){
+  probNoVacunarse <- runif(1)
+  #la probabilidad de personas que no se quieren vacunar es del 17.4% en Colombia
+  if(probNoVacunarse<=0.174){
+    nodos$decision[nodos$id==nodo] <- 1
+  }
+}
+
+```
+
+```{r}
+write.csv(nodos, file="nodos.csv", row.names = F)
+write.csv(aristas, file="aristas.csv", row.names = F)
+```
+
+## Infectar
+
+```{r}
+#arreglar infectados, ya que si estan muertos o en uci no pueden contagiar
+infectarfun <-function(nodos, aristas){
+  a <-0
+    a <- a+1
+  bolsita <- c()
+  
+    infectados <- nodos[nodos$infectados==1,]
+    infectados <- infectados[infectados$condicion==0,]
+  
+    for(inf in infectados$id){
+      bolsita <- c(bolsita,aristas$to[aristas$from==inf])
+    }
+    for(bol in bolsita){
+      if(nodos$infectados[nodos$id==bol]!=2 && nodos$infectados[nodos$id==bol]!=-1)
+      {
+        prob <- runif(1)
+        if(nodos$dosis[nodos$id==bol]==2){
+            if(prob<=0.03){
+               nodos$infectados[nodos$id == bol] <- 1
+            }
+        }else{
+          if(nodos$dosis[nodos$id==bol]==1){
+            if(prob<=0.12){
+               nodos$infectados[nodos$id == bol] <- 1
+            }
+          }else{
+            if(prob<=0.30){
+              nodos$infectados[nodos$id == bol] <- 1
+            }
+          }
+        }
+        
+      }
+      
+    }
+return(nodos)
+}
+
+
+```
+
+## Vacunación Por Nodos Centralizados
+
+```{r}
+vacunacion <- function(nodos, Tmax, lambda){
+  #ordenamos el vector teniendo en cuenta su centralidad
+  nodoscentral <-nodos[order(nodos$grado, decreasing = TRUE),]
+  nodoscentral <- nodoscentral[nodoscentral$decision==0,]
+  nodoscentral <- nodoscentral[nodoscentral$dosis==0,]
+  nodoscentral2 <- nodoscentral[nodoscentral$infectados!=-1,]
+  #que empiece la vacunación primera dosis
+  
+  t <- 0
+  for(nodo in nodoscentral2$id){
+    u <- runif(1)
+    t <- t-(log(u)/lambda)
+    if(t>Tmax){
+      break
+    }
+    else{
+      if(nodos$dosis[nodos$id==nodo]==0 && nodos$decision[nodos$id==nodo]==0 && nodos$infectados[nodos$id==nodo]==0){
+        nodos$dosis[nodos$id==nodo] <- 1
+      }
+      else{
+        if(nodos$dosis[nodos$id==nodo]==0 && nodos$decision[nodos$id==nodo]==0 && nodos$infectados[nodos$id==nodo]==2){
+          nodos$dosis[nodos$id==nodo] <- 1
+        }
+      }
+      
+    }
+  }
+  return(nodos)
+}
+
+```
+
+## Vacunar por segunda dosis
+
+```{r}
+vacunacion2 <- function(nodos, Tmax, lambda){
+  #ordenamos el vector teniendo en cuenta su centralidad
+  nodoscentral <-nodos[order(nodos$grado, decreasing = TRUE),]
+  nodoscentral <- nodoscentral[nodoscentral$dosis==1,]
+  nodoscentral2 <- nodoscentral[nodoscentral$infectados!=-1,]
+  #que empiece la vacunación primera dosis
+  
+  t <- 0
+  for(nodo in nodoscentral2$id){
+    u <- runif(1)
+    t <- t-(log(u)/lambda)
+    if(t>Tmax){
+      break
+    }
+    else{
+        nodos$dosis[nodos$id==nodo] <- 2
+      
+    }
+  }
+  return(nodos)
+}
+
+```
+
+## Vacunación Por Edades Mayor a Menor
+
+
+```{r}
+vacunacionPorEdades <- function(nodos, Tmax, lambda){
+  #ordenamos el vector teniendo en cuenta su centralidad
+  nodosedades <-nodos[order(nodos$edad, decreasing = TRUE),]
+  nodosedades <- nodosedades[nodosedades$decision==0,]
+  nodosedades <- nodosedades[nodosedades$dosis==0,]
+  nodosedades2 <- nodosedades[nodosedades$infectados!=-1,]
+  nodosedades2
+  #que empiece la vacunación primera dosis
+  
+  t <- 0
+  for(nodo in nodosedades2$id){
+    u <- runif(1)
+    t <- t-(log(u)/lambda)
+    if(t>Tmax){
+      break
+    }
+    else{
+      if(nodos$dosis[nodos$id==nodo]==0 && nodos$decision[nodos$id==nodo]==0 && nodos$infectados[nodos$id==nodo]==0){
+        nodos$dosis[nodos$id==nodo] <- 1
+      }
+      else{
+        if(nodos$dosis[nodos$id==nodo]==0 && nodos$decision[nodos$id==nodo]==0 && nodos$infectados[nodos$id==nodo]==2){
+          nodos$dosis[nodos$id==nodo] <- 1
+        }
+      }
+      
+    }
+  }
+  return(nodos)
+}
+
+```
+
+
+## Vacunación Por Nodos Aleatorios
+
+```{r}
+vacunacionrandom <- function(nodos, Tmax, lambda){
+  #revolvemos el dataset
+  random <- sample(1:hab,hab,replace=F)
+  muestrasrandom <- nodos[random,]
+  muestrasrandom <- muestrasrandom[muestrasrandom$decision==0,]
+  muestrasrandom <- muestrasrandom[muestrasrandom$dosis==0,]
+  muestrasrandom2 <- muestrasrandom[muestrasrandom$infectados!=-1,]
+  #que empiece la vacunación primera dosis
+  
+  t <- 0
+  for(nodo in muestrasrandom2$id){
+    u <- runif(1)
+    t <- t-(log(u)/lambda)
+    if(t>Tmax){
+      break
+    }
+    else{
+      if(nodos$dosis[nodos$id==nodo]==0 && nodos$decision[nodos$id==nodo]==0 && nodos$infectados[nodos$id==nodo]==0){
+        nodos$dosis[nodos$id==nodo] <- 1
+      }
+      else{
+        if(nodos$dosis[nodos$id==nodo]==0 && nodos$decision[nodos$id==nodo]==0 && nodos$infectados[nodos$id==nodo]==2){
+          nodos$dosis[nodos$id==nodo] <- 1
+        }
+      }
+      
+    }
+  }
+  return(nodos)
+}
+
+```
+
+## Función que establece la mortalidad
+
+```{r}
+muertePorCovid <- function(nodos){
+  #nodos que se encuentran actualmente infectados
+  nodosinf <- nodos[nodos$infectados==1,]
+ 
+  
+  #identificamos los nodos que se encuentran infectados
+  for(nodo in nodosinf$id){
+    #verificamos si ya se han vacunado con la primera dosis
+    if(nodos$dosis[nodos$id==nodo]==2){
+      if(nodos$t.cont[nodos$id==nodo]>=2){
+        
+          if(nodos$condicion[nodos$id==nodo]==0){
+            prob <- runif(1)
+            #del 100% el 1% va para uci
+            if(prob<=0.0144){
+              nodos$condicion[nodos$id==nodo] <- 1
+              nodos$t.cont[nodos$id==nodo] <-3
+            }else{
+              nodos$infectados[nodos$id==nodo] <- 2
+              nodos$t.cont[nodos$id==nodo] <-3
+            }
+          }else{
+            if(nodos$condicion[nodos$id==nodo]==1){
+              prob2 <- runif(1)
+              #si se encuentra el uci la probabilidad de morir es del 1%
+              if(prob2<=0.00144){
+                nodos$condicion[nodos$id==nodo] <- 2
+                nodos$infectados[nodos$id==nodo] <- -1
+                nodos$t.cont[nodos$id==nodo] <- 4
+              }else{
+                nodos$condicion[nodos$id==nodo] <- 0
+                nodos$infectados[nodos$id==nodo] <- 2
+                nodos$t.cont[nodos$id==nodo] <- 4
+              }
+            }
+          }
+        }
+        else{
+          if(nodos$t.cont[nodos$id==nodo]==1){
+            nodos$t.cont[nodos$id==nodo] <-2
+          }
+          else{
+            nodos$t.cont[nodos$id==nodo] <-1
+          }
+        }
+    }else{
+      if(nodos$dosis[nodos$id == nodo]==1){
+        #preguntamos si 
+        if(nodos$t.cont[nodos$id==nodo]>=2){
+          
+          if(nodos$condicion[nodos$id==nodo]==0){
+            prob <- runif(1)
+            #del 100% el 1% va para uci
+            if(prob<=0.0432){
+              nodos$condicion[nodos$id==nodo] <- 1
+              nodos$t.cont[nodos$id==nodo] <-3
+            }else{
+              nodos$infectados[nodos$id==nodo] <- 2
+              nodos$t.cont[nodos$id==nodo] <-3
+            }
+          }else{
+            if(nodos$condicion[nodos$id==nodo]==1){
+              prob2 <- runif(1)
+              #si se encuentra el uci la probabilidad de morir es del 1%
+              if(prob2<=0.0072){
+                nodos$condicion[nodos$id==nodo] <- 2
+                nodos$infectados[nodos$id==nodo] <- -1
+                nodos$t.cont[nodos$id==nodo] <- 4
+              }else{
+                nodos$condicion[nodos$id==nodo] <- 0
+                nodos$infectados[nodos$id==nodo] <- 2
+                nodos$t.cont[nodos$id==nodo] <- 4
+              }
+            }
+          }
+        }
+        else{
+          if(nodos$t.cont[nodos$id==nodo]==1){
+            nodos$t.cont[nodos$id==nodo] <-2
+          }
+          else{
+            nodos$t.cont[nodos$id==nodo] <-1
+          }
+        }
+      }
+      else{
+        if(nodos$edad[nodos$id==nodo]>60){
+          if(nodos$t.cont[nodos$id==nodo]>=2){
+            if(nodos$condicion[nodos$id==nodo]==0){
+              prob <- runif(1)
+              #del 100% el 29.6% va para uci
+              if(prob<=0.296){
+                nodos$condicion[nodos$id==nodo] <- 1
+                nodos$t.cont[nodos$id==nodo] <-3
+              }else{
+                nodos$infectados[nodos$id==nodo] <- 2
+                nodos$t.cont[nodos$id==nodo] <-3
+              }
+            }else{
+              if(nodos$condicion[nodos$id==nodo]==1){
+                prob2 <- runif(1)
+                #si se encuentra el uci la probabilidad de morir es del 30.8%
+                if(prob2<=0.308){
+                  nodos$condicion[nodos$id==nodo] <- 2
+                  nodos$infectados[nodos$id==nodo] <- -1
+                  nodos$t.cont[nodos$id==nodo] <- 4
+                }else{
+                  nodos$condicion[nodos$id==nodo] <- 0
+                  nodos$infectados[nodos$id==nodo] <- 2
+                  nodos$t.cont[nodos$id==nodo] <- 4
+                }
+              }
+            }
+          }
+          else{
+            if(nodos$t.cont[nodos$id==nodo]==1){
+              nodos$t.cont[nodos$id==nodo] <-2
+            }
+            else{
+              nodos$t.cont[nodos$id==nodo] <-1
+            }
+          }
+        }
+        else{
+          
+          if(nodos$t.cont[nodos$id==nodo]>=2){
+          
+            if(nodos$condicion[nodos$id==nodo]==0){
+              prob <- runif(1)
+              #del 100% el 20% va para uci
+              if(prob<=0.2){
+                nodos$condicion[nodos$id==nodo] <- 1
+                nodos$t.cont[nodos$id==nodo] <-3
+              }else{
+                nodos$infectados[nodos$id==nodo] <- 2
+                nodos$t.cont[nodos$id==nodo] <-3
+              }
+            }else{
+              if(nodos$condicion[nodos$id==nodo]==1){
+                prob2 <- runif(1)
+                #si se encuentra el uci la probabilidad de morir es del 25%
+                if(prob2<=0.2){
+                  nodos$condicion[nodos$id==nodo] <- 2
+                  nodos$infectados[nodos$id==nodo] <- -1
+                  nodos$t.cont[nodos$id==nodo] <- 4
+                }else{
+                  nodos$condicion[nodos$id==nodo] <- 0
+                  nodos$infectados[nodos$id==nodo] <- 2
+                  nodos$t.cont[nodos$id==nodo] <- 4
+                }
+              }
+            }
+          }
+          else{
+            if(nodos$t.cont[nodos$id==nodo]==1){
+              nodos$t.cont[nodos$id==nodo] <-2
+            }
+            else{
+              nodos$t.cont[nodos$id==nodo] <-1
+            }
+          }
+          
+        }
+      
+        
+      }
+    }
+  }
+  
+  return(nodos)
+}
+
+```
+
+## =====================================================================================================================================================================
+
+
+
+# Aqui Empieza La Simulación
+
+## Caso donde No hay vacunación
+
+```{r}
+#leemos el grafo
+nodos <- read_csv("nodos.csv")
+aristas <- read_csv("aristas.csv")
+#ingresamos a 5 agentes infectados a la población
+
+for(i in 1:5){
+    agentes <- round(runif(1, 1,hab))
+    nodos$infectados[nodos$id == agentes] <- 1
+}
+
+semanasNo <- 0
+infNo <- c()
+vacNo <- c()
+muertesNo <- c()
+for(i in 1:100){
+  if(length(nodos$id[nodos$infectados==1])==0){
+    noinf <-length(nodos$id[nodos$infectados==0])
+    
+    break
+    
+  }else{
+    
+    semanasNo <- semanasNo+1
+    
+    nodos <- infectarfun(nodos, aristas)
+    nodos <- muertePorCovid(nodos)
+    #nodos <- vacunacionrandom(nodos, 1, 100)
+    infNo <- c(infNo, length(nodos$id[nodos$infectados==1]))
+    vacNo <- c(vacNo, length(nodos$id[nodos$dosis==1]))
+    muertesNo <- c(muertesNo,length(nodos$id[nodos$condicion==2]))
+  }
+  
+  
+
+}
+
+aux <- muertesNo
+muertesNo2 <- c()
+for(i in 1:length(muertesNo)){
+  if(i==1){
+   muertesNo2 <- c(muertesNo2,aux[i]) 
+  }else{
+    muertesNo2 <- c(muertesNo2,aux[i]-aux[i-1]) 
+  }
+}
+
+
+```
+
+## Vacunación Random 
+
+
+```{r}
+#leemos el grafo
+nodos <- read_csv("nodos.csv")
+aristas <- read_csv("aristas.csv")
+#ingresamos a 5 agentes infectados a la población
+
+for(i in 1:5){
+    agentes <- round(runif(1, 1,hab))
+    nodos$infectados[nodos$id == agentes] <- 1
+}
+
+semanas <- 0
+inf <- c()
+vac <- c()
+muertes <- c()
+for(i in 1:100){
+  if(length(nodos$id[nodos$infectados==1])==0){
+    noinf <-length(nodos$id[nodos$infectados==0])
+    
+    break
+    
+  }else{
+    
+    semanas <- semanas+1
+    
+    nodos <- infectarfun(nodos, aristas)
+    nodos <- muertePorCovid(nodos)
+    nodos <- vacunacionrandom(nodos, 1, 100)
+    inf <- c(inf, length(nodos$id[nodos$infectados==1]))
+    vac <- c(vac, length(nodos$id[nodos$dosis==1]))
+    muertes <- c(muertes,length(nodos$id[nodos$condicion==2]))
+  }
+  
+  
+
+}
+
+aux <- muertes
+muertes2 <- c()
+for(i in 1:length(muertes)){
+  if(i==1){
+   muertes2 <- c(muertes2,aux[i]) 
+  }else{
+    muertes2 <- c(muertes2,aux[i]-aux[i-1]) 
+  }
+}
+
+
+```
+
+## Vacunación Por Edades
+
+
+```{r}
+#leemos el grafo
+nodos <- read_csv("nodos.csv")
+aristas <- read_csv("aristas.csv")
+#ingresamos a 5 agentes infectados a la población
+
+for(i in 1:5){
+    agentes <- round(runif(1, 1,hab))
+    nodos$infectados[nodos$id == agentes] <- 1
+}
+
+semanasEd <- 0
+infEd <- c()
+vacEd <- c()
+muertesEd <- c()
+for(i in 1:100){
+  if(length(nodos$id[nodos$infectados==1])==0){
+    noinf <-length(nodos$id[nodos$infectados==0])
+    
+    break
+    
+  }else{
+    
+    semanasEd <- semanasEd+1
+    
+    nodos <- infectarfun(nodos, aristas)
+    nodos <- muertePorCovid(nodos)
+    nodos <- vacunacionPorEdades(nodos, 1, 100)
+    infEd <- c(infEd, length(nodos$id[nodos$infectados==1]))
+    vacEd <- c(vacEd, length(nodos$id[nodos$dosis==1]))
+    muertesEd <- c(muertesEd,length(nodos$id[nodos$condicion==2]))
+  }
+  
+  
+
+}
+
+aux <- muertesEd
+muertesEd2 <- c()
+for(i in 1:length(muertesEd)){
+  if(i==1){
+   muertesEd2 <- c(muertesEd2,aux[i]) 
+  }else{
+    muertesEd2 <- c(muertesEd2,aux[i]-aux[i-1]) 
+  }
+}
+
+
+```
+
+## Vacunación Por Nodos Centralizados
+
+
+```{r}
+#leemos el grafo
+nodos <- read_csv("nodos.csv")
+aristas <- read_csv("aristas.csv")
+#ingresamos a 5 agentes infectados a la población
+
+for(i in 1:5){
+    agentes <- round(runif(1, 1,hab))
+    nodos$infectados[nodos$id == agentes] <- 1
+}
+
+semanasCe <- 0
+infCe <- c()
+vacCe <- c()
+muertesCe <- c()
+for(i in 1:100){
+  if(length(nodos$id[nodos$infectados==1])==0){
+    
+    break
+    
+  }else{
+    
+    semanasCe <- semanasCe+1
+    
+    nodos <- infectarfun(nodos, aristas)
+    nodos <- muertePorCovid(nodos)
+    nodos <- vacunacion(nodos, 1, 100)
+    infCe <- c(infCe, length(nodos$id[nodos$infectados==1]))
+    vacCe <- c(vacCe, length(nodos$id[nodos$dosis==1]))
+    muertesCe <- c(muertesCe,length(nodos$id[nodos$condicion==2]))
+  }
+  
+  
+
+}
+
+aux <- muertesCe
+muertesCe2 <- c()
+for(i in 1:length(muertesCe)){
+  if(i==1){
+   muertesCe2 <- c(muertesCe2,aux[i]) 
+  }else{
+    muertesCe2 <- c(muertesCe2,aux[i]-aux[i-1]) 
+  }
+}
+
+
+```
+
+# Resultados :)
+
+### Sin vacunación
+
+```{r}
+x <- c()
+x <- c(x,1:semanasNo)
+
+barplot(infNo, col = "cyan", names.arg = x, main = "Contagios")
+barplot(vacNo, col = "cyan", names.arg = x, main = "proceso de vacunación" )
+barplot(muertesNo2, col = "cyan", names.arg = x, main = "muertes")
+barplot(muertesNo, col = "cyan", names.arg = x, main = "muertes Acumuladas")
+```
+```{r}
+print(paste("La pandemia tuvo un tiempo estimado de: ", semanasNo, " Semanas"))
+print(paste("En este tiempo fallecieron: ", muertesNo[semanasNo], "Personas"))
+print(paste("El pico de contagios fue de: ", max(infNo), "Personas"))
+```
+
+
+### Vacunación Random
+
+```{r}
+x <- c()
+x <- c(x,1:semanas)
+
+barplot(inf, col = "seagreen1", names.arg = x, main = "Contagios")
+barplot(vac, col = "seagreen1", names.arg = x, main = "proceso de vacunación" )
+barplot(muertes2, col = "seagreen1", names.arg = x, main = "muertes")
+barplot(muertes, col = "seagreen1", names.arg = x, main ="muertes Acumuladas")
+```
+
+```{r}
+print(paste("La pandemia tuvo un tiempo estimado de: ", semanas, " Semanas"))
+print(paste("En este tiempo fallecieron: ", muertes[semanas], "Personas"))
+print(paste("El pico de contagios fue de: ", max(inf), "Personas"))
+```
+
+### Vacunación Por Edades
+
+```{r}
+x <- c()
+x <- c(x,1:semanasEd)
+
+barplot(infEd, col = 12, names.arg = x, main = "Contagios")
+barplot(vacEd, col = 12, names.arg = x, main = "proceso de vacunación" )
+barplot(muertesEd2, col = 12, names.arg = x, main = "muertes")
+barplot(muertesEd, col = 12, names.arg = x,  main ="muertes Acumuladas")
+```
+
+```{r}
+print(paste("La pandemia tuvo un tiempo estimado de: ", semanasEd, " Semanas"))
+print(paste("En este tiempo fallecieron: ", muertesEd[semanasEd], "Personas"))
+print(paste("El pico de contagios fue de: ", max(infEd), "Personas"))
+```
+
+### Vacunación Por Nodos Centralizados
+
+```{r}
+x <- c()
+x <- c(x,1:semanasCe)
+
+barplot(infCe, col = "plum", names.arg = x, main = "Contagios")
+barplot(vacCe, col = "plum", names.arg = x, main = "proceso de vacunación" )
+barplot(muertesCe2, col = "plum", names.arg = x, main = "muertes")
+barplot(muertesCe, col = "plum", names.arg = x, main = "muertes acumuladas")
+```
+
+```{r}
+print(paste("La pandemia tuvo un tiempo estimado de: ", semanasCe, " Semanas"))
+print(paste("En este tiempo fallecieron: ", muertesCe[semanas], "Personas"))
+print(paste("El pico de contagios fue de: ", max(infCe), "Personas"))
+```
+
+# Estrategia Alternativa
+
+## Simulación con segunda Dosis
+
+```{r}
+#leemos el grafo
+nodos <- read_csv("nodos.csv")
+aristas <- read_csv("aristas.csv")
+#ingresamos a 5 agentes infectados a la población
+
+for(i in 1:5){
+    agentes <- round(runif(1, 1,hab))
+    nodos$infectados[nodos$id == agentes] <- 1
+}
+
+semanasCe2 <- 0
+infCe2 <- c()
+vacCe2 <- c()
+muertesCe2 <- c()
+for(i in 1:100){
+  if(length(nodos$id[nodos$infectados==1])==0){
+    
+    break
+    
+  }else{
+    
+    semanasCe2 <- semanasCe2+1
+    
+    nodos <- infectarfun(nodos, aristas)
+    nodos <- muertePorCovid(nodos)
+    nodos <- vacunacion(nodos, 1, 100)
+    nodos <- vacunacion2(nodos, 1, 100)
+    infCe2 <- c(infCe2, length(nodos$id[nodos$infectados==1]))
+    vacCe2 <- c(vacCe2, length(nodos$id[nodos$dosis==2]))
+    muertesCe2 <- c(muertesCe2,length(nodos$id[nodos$condicion==2]))
+  }
+  
+  
+
+}
+
+aux <- muertesCe2
+muertesCe22 <- c()
+for(i in 1:length(muertesCe2)){
+  if(i==1){
+   muertesCe22 <- c(muertesCe22,aux[i]) 
+  }else{
+    muertesCe22 <- c(muertesCe22,aux[i]-aux[i-1]) 
+  }
+}
+
+
+```
+
+### Vacunación Por Nodos Centralizados segunda dosis
+
+
+```{r}
+x <- c()
+x <- c(x,1:semanasCe2)
+
+barplot(infCe2, col = "orangered1", names.arg = x, main = "Contagios")
+barplot(vacCe2, col = "orangered1", names.arg = x, main = "proceso de vacunación" )
+barplot(muertesCe22, col = "orangered1", names.arg = x, main = "muertes")
+barplot(muertesCe2, col = "orangered1", names.arg = x, main = "muertes Acumuladas")
+```
+
+```{r}
+print(paste("La pandemia tuvo un tiempo estimado de: ", semanasCe2, " Semanas"))
+print(paste("En este tiempo fallecieron: ", muertesCe2[semanas], "Personas"))
+print(paste("El pico de contagios fue de: ", max(infCe2), "Personas"))
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
